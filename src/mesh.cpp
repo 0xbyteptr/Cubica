@@ -61,174 +61,150 @@ void Mesh::draw() const {
 
 void Mesh::buildFromChunk(const Chunk* c, int cx, int cz, const ResourcePack* rp) {
     std::vector<float> verts;
-    // world origin for this chunk
     float ox = cx * CHUNK_SIZE;
     float oz = cz * CHUNK_SIZE;
 
-    auto isAir = [&](int lx,int y,int lz){
-        if (lx<0||lx>=CHUNK_SIZE||lz<0||lz>=CHUNK_SIZE||y<0||y>=CHUNK_HEIGHT) return true;
-        return !c->getBlock(lx,y,lz).isSolid();
+    auto isAir = [&](int lx, int y, int lz) -> bool {
+        if (lx < 0 || lx >= CHUNK_SIZE || lz < 0 || lz >= CHUNK_SIZE || y < 0 || y >= CHUNK_HEIGHT)
+            return true;
+        return !c->getBlock(lx, y, lz).isSolid();
     };
 
-    auto colorOf = [](BlockType t){
-        switch(t){
-            // base color is neutral for grass so only the top face is tinted green (topCol)
-            case BlockType::GRASS: return std::array<float,3>{1.0f,1.0f,1.0f};
-            case BlockType::DIRT:  return std::array<float,3>{0.545f,0.271f,0.075f};
-            case BlockType::STONE: return std::array<float,3>{0.5f,0.5f,0.5f};
-            case BlockType::WOOD:  return std::array<float,3>{0.64f,0.32f,0.16f};
-            case BlockType::LEAVES:return std::array<float,3>{0.3f,0.8f,0.3f};
-            default: return std::array<float,3>{1.0f,0.0f,1.0f};
+    // Base color for most blocks (used on sides/bottom, and top when not special)
+    auto baseColorOf = [](BlockType t) -> std::array<float, 3> {
+        switch (t) {
+            case BlockType::DIRT:   return {0.60f, 0.39f, 0.22f};
+            case BlockType::STONE:  return {0.58f, 0.58f, 0.58f};
+            case BlockType::WOOD:   return {0.64f, 0.32f, 0.16f};
+            case BlockType::LEAVES: return {0.40f, 0.70f, 0.30f};
+            default:                return {1.0f, 1.0f, 1.0f};
         }
     };
 
-    auto tileIndexOfDefault = [](BlockType t){
-        switch(t){
-            case BlockType::GRASS: return 0;
-            case BlockType::DIRT: return 1;
-            case BlockType::STONE: return 2;
-            case BlockType::WOOD: return 3;
-            case BlockType::LEAVES: return 4;
-            default: return 0;
+    // Special top color (only for grass when no resource pack)
+    auto topColorOf = [&](BlockType t) -> std::array<float, 3> {
+        if (t == BlockType::GRASS) {
+            if (!rp) return {0.55f, 0.85f, 0.35f};  // nice natural green tint
+            else     return {1.0f, 1.0f, 1.0f};     // let RP texture decide
         }
+        return baseColorOf(t);
     };
 
-    auto typeIdOf = [](BlockType t)->float{
-        switch(t){
-            case BlockType::GRASS: return 0.0f;
-            case BlockType::DIRT: return 1.0f;
-            case BlockType::STONE: return 2.0f;
+    auto typeIdOf = [](BlockType t) -> float {
+        switch (t) {
+            case BlockType::GRASS:  return 0.0f;
+            case BlockType::DIRT:   return 1.0f;
+            case BlockType::STONE:  return 2.0f;
             case BlockType::LEAVES: return 3.0f;
-            default: return -1.0f;
+            default:                return -1.0f;
         }
     };
 
-    int tileCount = 3;
-    float tileW = 1.0f / static_cast<float>(tileCount);
+    int atlasTileCount = rp ? std::max(1, rp->atlas.tiles) : 5;  // increased fallback
+    float tileW = 1.0f / static_cast<float>(atlasTileCount);
 
-    if (rp) {
-        tileCount = std::max(1, rp->atlas.tiles);
-        tileW = 1.0f / static_cast<float>(tileCount);
-    }
+    auto getTileForFace = [&](BlockType bt, int face) -> int {
+        if (!rp) {
+            // Fallback without RP: top different for grass, sides dirt-like
+            if (bt == BlockType::GRASS) return (face == 5) ? 0 : 1;
+            if (bt == BlockType::DIRT)   return 1;
+            if (bt == BlockType::STONE)  return 2;
+            if (bt == BlockType::WOOD)   return 3;
+            if (bt == BlockType::LEAVES) return 4;
+            return 0;
+        }
 
-    auto getTileForFace = [&](BlockType bt, int face)->int{
-      if (!rp) return tileIndexOfDefault(bt);
+        ResourcePack::Face f = ResourcePack::SIDE;
+        if (face == 4) f = ResourcePack::BOTTOM;
+        if (face == 5) f = ResourcePack::TOP;
 
-      ResourcePack::Face f = ResourcePack::SIDE;
-      switch(face){
-          case 0: f = ResourcePack::SIDE; break; // -X
-          case 1: f = ResourcePack::SIDE; break; // +X
-          case 2: f = ResourcePack::SIDE; break; // -Z
-          case 3: f = ResourcePack::SIDE; break; // +Z
-          case 4: f = ResourcePack::BOTTOM; break; // -Y
-          case 5: f = ResourcePack::TOP; break; // +Y
-      }
-
-      int idx = rp->getTileFor(bt, f);
-      if (idx < 0) return tileIndexOfDefault(bt);
-      return idx;
+        int idx = rp->getTileFor(bt, f);
+        return (idx >= 0) ? idx : 0;
     };
 
+    for (int lx = 0; lx < CHUNK_SIZE; ++lx) {
+        for (int lz = 0; lz < CHUNK_SIZE; ++lz) {
+            for (int y = 0; y < CHUNK_HEIGHT; ++y) {
+                Block b = c->getBlock(lx, y, lz);
+                if (!b.isSolid()) continue;
 
-    for (int lx=0; lx<CHUNK_SIZE; ++lx) for (int lz=0; lz<CHUNK_SIZE; ++lz) for (int y=0; y<CHUNK_HEIGHT; ++y) {
-        Block b = c->getBlock(lx,y,lz);
-        if (!b.isSolid()) continue;
-        auto col = colorOf(b.type);
-        float tid = typeIdOf(b.type);
-        // determine top-face color (greenish) when no resource pack present
-        auto topCol = col;
-        if (b.type == BlockType::GRASS) {
-            if (!rp) {
-                topCol = std::array<float,3>{0.2f, 0.9f, 0.2f};
-            } else {
-                topCol = col; // rely on texture from resource pack
+                BlockType bt = b.type;
+                float tid = typeIdOf(bt);
+
+                // Grass overlay only on sides
+                float overlayIdx = -1.0f;
+                if (bt == BlockType::GRASS && rp) {
+                    int oi = rp->getOverlayFor(bt);
+                    if (oi >= 0) {
+                        overlayIdx = static_cast<float>(oi);
+                    }
+                }
+
+                float x0 = ox + lx;     float x1 = x0 + 1.0f;
+                float z0 = oz + lz;     float z1 = z0 + 1.0f;
+                float y0 = static_cast<float>(y);
+                float y1 = y0 + 1.0f;
+
+                // Bright placeholder – replace with proper AO later
+                float lightVal = 0.95f;
+
+                auto pushQuad = [&](float px0, float py0, float pz0,
+                                    float px1, float py1, float pz1,
+                                    float u0, float u1, float v0, float v1,
+                                    const std::array<float,3>& col,
+                                    float worldYForShader, float ovr) {
+                    pushVertex(verts, px0, py0, pz0, u0, v0, lightVal, col[0],col[1],col[2], tid, worldYForShader, ovr);
+                    pushVertex(verts, px1, py0, pz0, u1, v0, lightVal, col[0],col[1],col[2], tid, worldYForShader, ovr);
+                    pushVertex(verts, px1, py1, pz1, u1, v1, lightVal, col[0],col[1],col[2], tid, worldYForShader, ovr);
+                    pushVertex(verts, px0, py0, pz0, u0, v0, lightVal, col[0],col[1],col[2], tid, worldYForShader, ovr);
+                    pushVertex(verts, px1, py1, pz1, u1, v1, lightVal, col[0],col[1],col[2], tid, worldYForShader, ovr);
+                    pushVertex(verts, px0, py1, pz1, u0, v1, lightVal, col[0],col[1],col[2], tid, worldYForShader, ovr);
+                };
+
+                // ──────────────────────────────────────────────
+                // Side faces: use neutral color for grass (so overlay can shine)
+                std::array<float,3> sideCol = (bt == BlockType::GRASS) ? std::array<float,3>{1.0f,1.0f,1.0f} : baseColorOf(bt);
+
+                // -X
+                if (isAir(lx-1, y, lz)) {
+                    int tile = getTileForFace(bt, 0);
+                    float ti = tile * tileW;
+                    pushQuad(x0,y0,z0, x0,y1,z1, ti, ti + tileW, 0.0f, 1.0f, sideCol, y0, overlayIdx);
+                }
+                // +X
+                if (isAir(lx+1, y, lz)) {
+                    int tile = getTileForFace(bt, 1);
+                    float ti = tile * tileW;
+                    pushQuad(x1,y0,z1, x1,y1,z0, ti, ti + tileW, 0.0f, 1.0f, sideCol, y0, overlayIdx);
+                }
+                // -Z
+                if (isAir(lx, y, lz-1)) {
+                    int tile = getTileForFace(bt, 2);
+                    float ti = tile * tileW;
+                    pushQuad(x1,y0,z0, x0,y1,z0, ti, ti + tileW, 0.0f, 1.0f, sideCol, y0, overlayIdx);
+                }
+                // +Z
+                if (isAir(lx, y, lz+1)) {
+                    int tile = getTileForFace(bt, 3);
+                    float ti = tile * tileW;
+                    pushQuad(x0,y0,z1, x1,y1,z1, ti, ti + tileW, 0.0f, 1.0f, sideCol, y0, overlayIdx);
+                }
+
+                // Bottom
+                if (isAir(lx, y-1, lz)) {
+                    int tile = getTileForFace(bt, 4);
+                    float ti = tile * tileW;
+                    pushQuad(x0,y0,z0, x1,y0,z1, ti, ti + tileW, 0.0f, 1.0f, baseColorOf(bt), y0, -1.0f);
+                }
+
+                // Top – special color for grass when no RP
+                if (isAir(lx, y+1, lz)) {
+                    int tile = getTileForFace(bt, 5);
+                    float ti = tile * tileW;
+                    auto topCol = topColorOf(bt);
+                    pushQuad(x0,y1,z1, x1,y1,z0, ti, ti + tileW, 0.0f, 1.0f, topCol, y1, -1.0f);
+                }
             }
-        }
-        // compute overlay index for grass sides (if any)
-        float overlayIdx = -1.0f;
-        if (rp && b.type == BlockType::GRASS) {
-            int oi = rp->getOverlayFor(b.type);
-            if (oi >= 0) { overlayIdx = (float)oi; printf("Mesh: grass at %d,%d,%d overlay tile %d\n", lx,lz,y,oi); }
-        }
-
-        // each face if exposed add two triangles
-        float x0 = ox + lx; float x1 = x0+1.0f;
-        float z0 = oz + lz; float z1 = z0+1.0f;
-        float y0 = y; float y1 = y+1.0f;
-        float l = 1.0f; // light placeholder
-        // -X
-        if (isAir(lx-1,y,lz)) {
-            int tile = getTileForFace(b.type, 0);
-            float ti = tile * tileW;
-            float u0 = ti, u1 = ti + tileW;
-            pushVertex(verts, x0,y0,z0, u0,0, l, col[0],col[1],col[2], tid, -1.0f, overlayIdx);
-            pushVertex(verts, x0,y0,z1, u1,0, l, col[0],col[1],col[2], tid, -1.0f, overlayIdx);
-            pushVertex(verts, x0,y1,z1, u1,1, l, col[0],col[1],col[2], tid, -1.0f, overlayIdx);
-            pushVertex(verts, x0,y0,z0, u0,0, l, col[0],col[1],col[2], tid, -1.0f, overlayIdx);
-            pushVertex(verts, x0,y1,z1, u1,1, l, col[0],col[1],col[2], tid, -1.0f, overlayIdx);
-            pushVertex(verts, x0,y1,z0, u0,1, l, col[0],col[1],col[2], tid, -1.0f, overlayIdx);
-        }
-        // +X
-        if (isAir(lx+1,y,lz)) {
-            int tile = getTileForFace(b.type, 1);
-            float ti = tile * tileW;
-            float u0 = ti, u1 = ti + tileW;
-            pushVertex(verts, x1,y0,z1, u0,0, l, col[0],col[1],col[2], tid, -1.0f, overlayIdx);
-            pushVertex(verts, x1,y0,z0, u1,0, l, col[0],col[1],col[2], tid, -1.0f, overlayIdx);
-            pushVertex(verts, x1,y1,z0, u1,1, l, col[0],col[1],col[2], tid, -1.0f, overlayIdx);
-            pushVertex(verts, x1,y0,z1, u0,0, l, col[0],col[1],col[2], tid, -1.0f, overlayIdx);
-            pushVertex(verts, x1,y1,z0, u1,1, l, col[0],col[1],col[2], tid, -1.0f, overlayIdx);
-            pushVertex(verts, x1,y1,z1, u0,1, l, col[0],col[1],col[2], tid, -1.0f, overlayIdx);
-        }
-        // -Z
-        if (isAir(lx,y,lz-1)) {
-            int tile = getTileForFace(b.type, 2);
-            float ti = tile * tileW;
-            float u0 = ti, u1 = ti + tileW;
-
-            pushVertex(verts, x1,y0,z0, u0,0, l, col[0],col[1],col[2], tid, -1.0f, overlayIdx);
-            pushVertex(verts, x0,y0,z0, u1,0, l, col[0],col[1],col[2], tid, -1.0f, overlayIdx);
-            pushVertex(verts, x0,y1,z0, u1,1, l, col[0],col[1],col[2], tid, -1.0f, overlayIdx);
-            pushVertex(verts, x1,y0,z0, u0,0, l, col[0],col[1],col[2], tid, -1.0f, overlayIdx);
-            pushVertex(verts, x0,y1,z0, u1,1, l, col[0],col[1],col[2], tid, -1.0f, overlayIdx);
-            pushVertex(verts, x1,y1,z0, u0,1, l, col[0],col[1],col[2], tid, -1.0f, overlayIdx);
-        }
-        // +Z
-        if (isAir(lx,y,lz+1)) {
-            int tile = getTileForFace(b.type, 3);
-            float ti = tile * tileW;
-            float u0 = ti, u1 = ti + tileW;
-            pushVertex(verts, x0,y0,z1, u0,0, l, col[0],col[1],col[2], tid, -1.0f, overlayIdx);
-            pushVertex(verts, x1,y0,z1, u1,0, l, col[0],col[1],col[2], tid, -1.0f, overlayIdx);
-            pushVertex(verts, x1,y1,z1, u1,1, l, col[0],col[1],col[2], tid, -1.0f, overlayIdx);
-            pushVertex(verts, x0,y0,z1, u0,0, l, col[0],col[1],col[2], tid, -1.0f, overlayIdx);
-            pushVertex(verts, x1,y1,z1, u1,1, l, col[0],col[1],col[2], tid, -1.0f, overlayIdx);
-            pushVertex(verts, x0,y1,z1, u0,1, l, col[0],col[1],col[2], tid, -1.0f, overlayIdx);
-        }
-        // -Y (bottom)
-        if (isAir(lx,y-1,lz)) {
-            int tile = getTileForFace(b.type, 0);
-            float ti = tile * tileW;
-            float u0 = ti, u1 = ti + tileW;
-            pushVertex(verts, x0,y0,z0, u0,0, l, col[0],col[1],col[2], tid, -1.0f, overlayIdx);
-            pushVertex(verts, x1,y0,z0, u1,0, l, col[0],col[1],col[2], tid, -1.0f, overlayIdx);
-            pushVertex(verts, x1,y0,z1, u1,1, l, col[0],col[1],col[2], tid, -1.0f, overlayIdx);
-            pushVertex(verts, x0,y0,z0, u0,0, l, col[0],col[1],col[2], tid, -1.0f, overlayIdx);
-            pushVertex(verts, x1,y0,z1, u1,1, l, col[0],col[1],col[2], tid, -1.0f, overlayIdx);
-            pushVertex(verts, x0,y0,z1, u0,1, l, col[0],col[1],col[2], tid, -1.0f, overlayIdx);
-        }
-        // +Y (top)
-        if (isAir(lx,y+1,lz)) {
-            int tile = getTileForFace(b.type, 5);
-            float ti = tile * tileW;
-            float u0 = ti, u1 = ti + tileW;
-            // use topCol for grass tops when appropriate
-            pushVertex(verts, x0,y1,z1, u0,0, l, topCol[0],topCol[1],topCol[2], tid, y1, overlayIdx);
-            pushVertex(verts, x1,y1,z1, u1,0, l, topCol[0],topCol[1],topCol[2], tid, y1, overlayIdx);
-            pushVertex(verts, x1,y1,z0, u1,1, l, topCol[0],topCol[1],topCol[2], tid, y1, overlayIdx);
-            pushVertex(verts, x0,y1,z1, u0,0, l, topCol[0],topCol[1],topCol[2], tid, y1, overlayIdx);
-            pushVertex(verts, x1,y1,z0, u1,1, l, topCol[0],topCol[1],topCol[2], tid, y1, overlayIdx);
-            pushVertex(verts, x0,y1,z0, u0,1, l, topCol[0],topCol[1],topCol[2], tid, y1, overlayIdx);
         }
     }
 
